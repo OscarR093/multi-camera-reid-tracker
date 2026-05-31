@@ -1,0 +1,4 @@
+from detector.yolo_detector import YOLODetector
+from detector.tracker import PersonTracker
+from detector.soft_biometrics import SoftBiometricsExtractor
+from detector.camera_reader import CameraReader
