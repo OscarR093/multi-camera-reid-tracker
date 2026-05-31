@@ -7,7 +7,7 @@ logger = logging.getLogger(__name__)
 
 
 class PersonTracker:
-    def __init__(self, confidence: float = 0.5, device: str = "cpu"):
+    def __init__(self, confidence: float = 0.5, device: str = "cuda"):
         self.confidence = confidence
         self.device = device
         self.model = YOLO("yolov8n.pt")

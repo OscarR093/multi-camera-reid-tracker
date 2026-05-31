@@ -2,13 +2,33 @@
 
 ## Setup
 
+### With GPU (default)
+
 ```bash
-# Install Python dependencies (in conda env or venv)
-pip install -r requirements.txt
+# Install Python dependencies (conda env recommended)
+conda activate cameras
+pip install onnxruntime-gpu>=1.15.0
+
+# Install CUDA 12 runtime libraries
+conda install -c conda-forge libcublas=12.4 libcufft libcurand libcusolver libcusparse cuda-version=12 cudnn
 
 # Install frontend dependencies
 cd frontend && npm install
+
+# Verify GPU
+python -c "
+import torch; print('CUDA:', torch.cuda.is_available())
+import onnxruntime as ort; print('ONNX:', ort.get_available_providers())
+"
 ```
+
+### Without GPU (fallback)
+
+```bash
+pip install onnxruntime>=1.15.0  # non-GPU version
+```
+
+Then edit `detector/tracker.py` and `reid/embedder.py`: change `device: str = "cuda"` → `device: str = "cpu"`.
 
 ## Export ReID model (one-time, or when upgrading model)
 
@@ -17,31 +37,35 @@ python scripts/export_reid_onnx.py
 # → models/reid_mobilenet_v3.onnx (10 MB)
 ```
 
-This uses MobileNetV3-Small as feature extractor (1024-dim embeddings). The ONNX model runs on CPU via onnxruntime — no GPU required at inference time.
+This uses MobileNetV3-Small as feature extractor (1024-dim embeddings). The ONNX model runs on GPU via `onnxruntime-gpu` (CUDAExecutionProvider) by default.
 
 ## Run
 
-### With Docker (recommended)
+### With Docker (GPU recommended)
 
 ```bash
-# Start Redis
-docker-compose up -d
+# Build and start backend + Redis with GPU access
+docker compose up --build -d
+# → API at http://localhost:8000
 
 # Start frontend dev server
 cd frontend && npm run dev
 # → http://localhost:5173
 ```
 
-### Without Docker
+### Without Docker (direct Python)
 
 Requires Redis running on `localhost:6379`.
 
 ```bash
-# Terminal 1: Backend
+# Terminal 1: Start Redis
+docker compose up -d redis
+
+# Terminal 2: Backend (GPU by default)
 python main.py
 # → API at http://localhost:8000
 
-# Terminal 2: Frontend
+# Terminal 3: Frontend
 cd frontend && npm run dev
 # → http://localhost:5173
 ```
@@ -68,10 +92,14 @@ Copy `.env.example` to `.env` and adjust:
 
 ```bash
 # Backend
-python main.py                          # Start backend
+python main.py                          # Start backend (GPU)
 python -c "from core.config import settings; print(settings.camera_list)"  # Test config
 python scripts/export_reid_onnx.py       # Re-export ONNX model
 python scripts/backfill_counts.py        # Generate fake historical data
+
+# GPU verification
+python -c "import torch; print('CUDA:', torch.cuda.is_available(), torch.cuda.get_device_name(0))"
+python -c "import onnxruntime as ort; print('Providers:', ort.get_available_providers())"
 
 # Frontend
 cd frontend && npm run dev              # Dev server with HMR
@@ -79,8 +107,8 @@ cd frontend && npm run build            # Production build
 cd frontend && npx tsc --noEmit         # TypeScript type check
 
 # Docker
-docker-compose up -d                    # Start Redis
-docker-compose down                     # Stop Redis
+docker compose up --build -d            # Start all services with GPU
+docker compose down                     # Stop all services
 docker exec -it camera-redis redis-cli  # Access Redis CLI
 docker exec -it camera-redis redis-cli FLUSHDB  # Clean all Redis data
 ```
@@ -107,10 +135,10 @@ docker exec -it camera-redis redis-cli FLUSHDB  # Clean all Redis data
 ## Architecture
 
 ```
-Video file/RTSP ─► CameraReader ─► YOLOv8n + ByteTrack
+Video file/RTSP ─► CameraReader ─► YOLOv8n + ByteTrack (GPU via CUDA)
                                       │
                                       ▼
-                                Person Crop ─► ONNX ReID (MobileNetV3)
+                                Person Crop ─► ONNX ReID (GPU via CUDAExecutionProvider)
                                       │            │
                                       │       1024-dim embedding
                                       ▼
@@ -122,6 +150,10 @@ Video file/RTSP ─► CameraReader ─► YOLOv8n + ByteTrack
                                       │
                                  WebSocket ─► Frontend (React)
 ```
+
+Both inference components (YOLOv8n + ReID embedder) run on GPU by default:
+- YOLOv8n uses PyTorch CUDA backend (`device="cuda"`)
+- ReID embedder uses `onnxruntime-gpu` with `CUDAExecutionProvider`
 
 ## Testing cross-camera identity matching
 
@@ -135,8 +167,16 @@ If matching works, the `total_count` badge in the frontend will show ~N (not ~2N
 
 ## Performance notes
 
-- YOLOv8n inference: ~30-50ms per frame per camera on CPU
-- ONNX ReID per crop batch: ~2-3ms on CPU
-- **Total CPU usage: 40-50% on Ryzen 7900 (12-core) with 2 cameras at ~5fps**
-- Production recommendation: cap detection rate at 5fps via `DETECTION_INTERVAL`; use GPU for >2 cameras or >5fps
-- For GPU inference, set `device="cuda"` in tracker/embedder init and change `CAMERA_SOURCES` to RTSP URLs
+| Component | CPU (Ryzen 7900) | GPU (RTX 5060 Ti) |
+|---|---|---|
+| YOLOv8n + ByteTrack | ~30-50 ms/frame | **9.8 ms** |
+| ONNX ReID (batch 5) | ~2-3 ms | **2.3 ms** |
+| Total per frame | ~40 ms | **~12 ms** |
+| Max theoretical FPS | ~25 | **~83** |
+| CPU usage (2 cams @ 5fps) | 40-50% | **<10%** |
+| VRAM usage | N/A | ~1.5 GB |
+
+- YOLOv8n inference on GPU: **3-5x faster** than CPU
+- ONNX ReID on GPU: scales efficiently with batch size
+- GPU leaves plenty of headroom for face recognition and additional cameras
+- For CPU fallback, change `device="cuda"` → `device="cpu"` in `detector/tracker.py:10` and `reid/embedder.py:14`

@@ -65,7 +65,7 @@ class Pipeline:
             ttl=settings.identity_ttl,
         )
 
-        self.reid_embedder = ReIDEmbedder()
+        self.reid_embedder = ReIDEmbedder(device="cuda")
 
         for i, source in enumerate(self.camera_sources):
             cam_id = f"cam_{i}"
@@ -73,7 +73,8 @@ class Pipeline:
             if reader.connect():
                 self.readers[cam_id] = reader
                 self.trackers[cam_id] = PersonTracker(
-                    confidence=settings.detection_confidence
+                    confidence=settings.detection_confidence,
+                    device="cuda",
                 )
                 self.extractors[cam_id] = SoftBiometricsExtractor()
                 self._active_local_tracks[cam_id] = set()

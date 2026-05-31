@@ -11,7 +11,7 @@ _MODEL_DIR = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file
 
 
 class ReIDEmbedder:
-    def __init__(self, model_path: Optional[str] = None, device: str = "cpu"):
+    def __init__(self, model_path: Optional[str] = None, device: str = "cuda"):
         if model_path is None:
             model_path = os.path.join(_MODEL_DIR, "reid_mobilenet_v3.onnx")
 
